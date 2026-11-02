@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="560" viewBox="0 0 900 560" font-family="Segoe UI, system-ui, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#5b6b8c"/>
+    </marker>
+    <style>
+      .box { fill: #f7f9fc; stroke: #c3cee0; stroke-width: 1.5; rx: 10; }
+      .box-hi { fill: #eef4ff; stroke: #7d9bd6; stroke-width: 1.8; rx: 10; }
+      .t { fill: #1f2a3d; font-size: 15px; font-weight: 600; }
+      .s { fill: #5b6b8c; font-size: 12px; }
+      .arrow { stroke: #5b6b8c; stroke-width: 1.8; fill: none; marker-end: url(#arrow); }
+      .note { fill: #8a94a8; font-size: 11px; }
+    </style>
+  </defs>
+
+  <text x="450" y="30" text-anchor="middle" class="t" font-size="18">dsh-companion-kit · architecture</text>
+
+  <!-- 1. User -->
+  <rect class="box" x="40" y="60" width="170" height="64"/>
+  <text x="125" y="86" text-anchor="middle" class="t">你的 QQ</text>
+  <text x="125" y="106" text-anchor="middle" class="s">Your QQ client</text>
+
+  <!-- 2. NapCat -->
+  <rect class="box-hi" x="290" y="52" width="220" height="80"/>
+  <text x="400" y="78" text-anchor="middle" class="t">NapCat</text>
+  <text x="400" y="98" text-anchor="middle" class="s">third-party QQ runtime</text>
+  <text x="400" y="116" text-anchor="middle" class="note">OneBot HTTP :3000 · WebUI :6099</text>
+
+  <!-- 3. Bridge -->
+  <rect class="box-hi" x="590" y="52" width="250" height="80"/>
+  <text x="715" y="78" text-anchor="middle" class="t">dsh-qq-bridge</text>
+  <text x="715" y="98" text-anchor="middle" class="s">poll → followup → send</text>
+  <text x="715" y="116" text-anchor="middle" class="note">watermark + backfill</text>
+
+  <!-- 4. Session -->
+  <rect class="box" x="560" y="210" width="310" height="150"/>
+  <text x="715" y="238" text-anchor="middle" class="t">DSH session</text>
+  <rect class="box" x="580" y="252" width="130" height="38"/>
+  <text x="645" y="276" text-anchor="middle" class="s">fish-memory</text>
+  <rect class="box" x="720" y="252" width="130" height="38"/>
+  <text x="785" y="276" text-anchor="middle" class="s">feiyu-mood</text>
+  <rect class="box" x="580" y="300" width="270" height="38"/>
+  <text x="715" y="324" text-anchor="middle" class="s">speak-up · purpose → followup</text>
+
+  <!-- 5. Group chat -->
+  <rect class="box" x="60" y="240" width="300" height="96"/>
+  <text x="210" y="266" text-anchor="middle" class="t">dsh-group-chat</text>
+  <text x="210" y="288" text-anchor="middle" class="s">session A ⇄ session B (max 4 hops)</text>
+  <text x="210" y="310" text-anchor="middle" class="note">local only · no external protocol</text>
+
+  <!-- 6. Watchdog -->
+  <rect class="box" x="60" y="420" width="300" height="96"/>
+  <text x="210" y="446" text-anchor="middle" class="t">watchdog.ps1 (v2)</text>
+  <text x="210" y="468" text-anchor="middle" class="s">process alive? logged in?</text>
+  <text x="210" y="490" text-anchor="middle" class="note">15 / 30 / 60 min backoff → ask human</text>
+
+  <rect class="box" x="420" y="420" width="200" height="96"/>
+  <text x="520" y="446" text-anchor="middle" class="t">Task Scheduler</text>
+  <text x="520" y="468" text-anchor="middle" class="s">AtLogOn</text>
+  <text x="520" y="490" text-anchor="middle" class="s">every 5 min</text>
+
+  <!-- arrows -->
+  <path class="arrow" d="M210 92 L285 92"/>
+  <path class="arrow" d="M510 92 L585 92"/>
+  <path class="arrow" d="M715 132 L715 205"/>
+  <path class="arrow" d="M560 245 L365 260" stroke-dasharray="5 4"/>
+  <path class="arrow" d="M210 336 L210 415" stroke-dasharray="5 4"/>
+  <path class="arrow" d="M360 468 L415 468"/>
+
+  <text x="240" y="82" class="note">message</text>
+  <text x="530" y="82" class="note">HTTP</text>
+  <text x="725" y="172" class="note">agent.followup()</text>
+  <text x="370" y="236" class="note">same sessions</text>
+  <text x="218" y="380" class="note">supervises</text>
+  <text x="450" y="545" text-anchor="middle" class="note">All local. Only the model API leaves this machine.</text>
+</svg>
