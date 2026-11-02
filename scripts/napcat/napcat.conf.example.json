@@ -1,0 +1,7 @@
+{
+  "NapCatDir": "D:\\NapCat",
+  "QQAccount": "",
+  "OneBotPort": 3000,
+  "WebUiPort": 6099,
+  "_说明": "复制本文件为 napcat.conf.json 再改。QQAccount 留空则用启动时传进来的 -q 参数。"
+}

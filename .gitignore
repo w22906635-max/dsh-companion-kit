@@ -1,0 +1,13 @@
+# 真实配置与数据，绝不提交
+napcat.conf.json
+napcat-pw.txt
+*.log
+*.zstd
+watchdog-state.json
+node_modules/
+.DS_Store
+Thumbs.db
+
+# 本地调试
+*.local.*
+.tmp/

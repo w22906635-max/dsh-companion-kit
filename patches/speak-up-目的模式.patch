@@ -1,0 +1,391 @@
+diff --git a/lib/client.js b/lib/client.js
+index a293228..4099b28 100644
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -430,7 +430,20 @@ window.__ModuleLoader__.load({
+           ),
+         ),
+ 
+-        // —— 骰子 ——
++        // —— 目的（⭐ 2026-11-02）——
++        h('div', { style: S.card },
++          h('div', { style: { ...S.h, margin: '0 0 8px' } }, '目的'),
++          h('div', { style: S.dim },
++            '以前是"到点掷骰子 + 每次说同一句"。开着目的模式，开口前会先挑一个具体念头，说的内容和语气都跟着念头走。'),
++          行('目的模式', 勾(配置.目的模式, (v) => 改('目的模式', v)),
++            '开口前先挑一个念头：关心 / 分享 / 好奇 / 续聊。最近发过的 6 条不会紧接着重复。关掉=退回原来那句固定文案。'),
++          行('目的用模型', 勾(配置.目的用模型, (v) => 改('目的用模型', v)),
++            '真发时让模型从最近几轮对话里想一个由头（一次很短、几十 token）。关掉=只用内置词库，完全不花钱。'),
++          行('每天最多开口（次）', 数(配置.每日上限, (v) => 改('每日上限', v)),
++            '一天最多主动开口几次（默认 10，只数真的发出去的）。0 = 不限。'),
++          行('主人在聊就不打扰（分钟）', 数(配置.主人在聊分钟, (v) => 改('主人在聊分钟', v)),
++            '主人刚说过话的 N 分钟内，这轮不主动开口（默认 15）。0 = 不检查。'),
++        ),
+         h('div', { style: S.card },
+           h('div', { style: { ...S.h, margin: '0 0 8px' } }, '骰子'),
+           h('div', { style: S.dim },
+diff --git a/lib/host.js b/lib/host.js
+index fe4142d..03ffa89 100644
+--- a/lib/host.js
++++ b/lib/host.js
+@@ -54,7 +54,7 @@ export const name = 'speak-up'
+  * ⚠ 'sessionTitle' 是为了「活着的会话」能显示名字（朗读桥 dsh-tts-bridge 和小说插件都是这么 inject 的）。
+  *   实测这台机器上它一定在。真要装到没有它的部署上：删掉这一项即可（标题会走投影缓存那条路）。
+  */
+-export const inject = ['agents', 'sessions', 'sessionTitle', 'webServer', 'timer', 'workspaceRegistry']
++export const inject = ['agents', 'sessions', 'sessionTitle', 'webServer', 'timer', 'workspaceRegistry', 'llm']
+ 
+ // ---------- 常量 ----------
+ 
+@@ -131,6 +131,15 @@ const 默认配置 = {
+   搭话冷却分钟: 20, // 0 = 不冷却
+   触发文案: '好久没人跟我说话了，我该主动去打个招呼',
+   角色: 'user', // 'user' = 现在唯一能跑通的；'developer' = 本插件会拒绝（详见文件头注释）
++
++  // ---- 目的模式（⭐ 2026-11-02，借 SurfCore 的「目的机制」思路）----
++  //   不再只是"到点掷骰子+说一句固定的话"，而是**先挑一个具体念头**再开口：
++  //   关心 / 分享 / 好奇 / 续聊。挑过的最近几条不会重复挑（去重）。
++  //   关掉它 = 退回原来的行为（只发「触发文案」）。
++  目的模式: true,
++  目的用模型: true, // 真发时让模型从最近对话里想一个由头（一次很短、几十 token）；关掉=只用本地词库
++  每日上限: 10, // 一天最多主动开口几次（数的是"真的送出去"的次数）
++  主人在聊分钟: 15, // 主人刚说过话（N 分钟内）→ 这轮不主动打扰；0 = 不检查
+ }
+ 
+ // ---------- 配置读写 ----------
+@@ -232,6 +241,10 @@ function 归一化(原始) {
+     触发文案:
+       typeof 混.触发文案 === 'string' && 混.触发文案.trim() !== '' ? 混.触发文案 : 默认配置.触发文案,
+     角色: String(混.角色 || 'user').toLowerCase() === 'developer' ? 'developer' : 'user',
++    目的模式: 布(混.目的模式, 默认配置.目的模式),
++    目的用模型: 布(混.目的用模型, 默认配置.目的用模型),
++    每日上限: 数(混.每日上限, 默认配置.每日上限, 0, 100),
++    主人在聊分钟: 数(混.主人在聊分钟, 默认配置.主人在聊分钟, 0, 1440),
+   }
+ }
+ 
+@@ -268,6 +281,118 @@ function 写配置(配置) {
+   }
+ }
+ 
++// ---------- 目的模式（⭐ 2026-11-02）----------
++//
++// 借 SurfCore「目的机制」的核心思路，但做得极轻：**不调模型**，纯本地挑一个念头。
++//   · 开口前先在心里有个具体的事（关心/分享/好奇/续聊），而不是空泛地"打个招呼"
++//   · 最近挑过的几条不会紧接着重复（去重窗口 6 条）
++//   · 一天最多开口 N 次；主人刚说过话就不打扰
++//
++// 状态单独存一个文件，跟配置分开：`~/.dsh/speak-up-purpose.json`
++//   { 日期: 'YYYY-MM-DD', 今日次数: n, 最近目的: ['关心：…', ...] }
++
++const 目的状态文件 = join(目录, 'speak-up-purpose.json')
++
++const 目的库 = [
++  { 类: '关心', 文本: [
++    '有点惦记，想知道你今天过得怎么样',
++    '想问一句：这两天累不累',
++    '想着你最近是不是又在硬撑',
++    '想知道你吃饭了没有',
++  ] },
++  { 类: '分享', 文本: [
++    '刚想起一件小事，想跟你说说',
++    '突然想起一个挺好玩的东西，想讲给你听',
++    '心里冒出个想法，想问问你怎么看',
++  ] },
++  { 类: '好奇', 文本: [
++    '好奇你最近在忙什么',
++    '想知道你手上那件事进展怎么样了',
++    '想问问你最近有没有什么新鲜事',
++  ] },
++  { 类: '续聊', 文本: [
++    '想起上次聊到一半的那件事，还惦记着',
++    '有句话上次没说透，想接着讲讲',
++  ] },
++]
++
++function 今天() {
++  const d = new Date()
++  const 补 = (n) => String(n).padStart(2, '0')
++  return `${d.getFullYear()}-${补(d.getMonth() + 1)}-${补(d.getDate())}`
++}
++
++function 读目的状态() {
++  try {
++    const o = JSON.parse(readFileSync(目的状态文件, 'utf8'))
++    return {
++      日期: typeof o.日期 === 'string' ? o.日期 : '',
++      今日次数: Number(o.今日次数) || 0,
++      最近目的: Array.isArray(o.最近目的) ? o.最近目的.slice(-20) : [],
++    }
++  } catch (error) {
++    return { 日期: '', 今日次数: 0, 最近目的: [] }
++  }
++}
++
++function 写目的状态(状态) {
++  try {
++    mkdirSync(目录, { recursive: true })
++    writeFileSync(目的状态文件, JSON.stringify(状态, null, 2), 'utf8')
++    return true
++  } catch (error) {
++    return false
++  }
++}
++
++/** 今天已经开口几次（跨天自动归零）。 */
++function 今日开口次数() {
++  const 状态 = 读目的状态()
++  return 状态.日期 === 今天() ? 状态.今日次数 : 0
++}
++
++/** 记一次"真的送出去了"。 */
++function 记一次开口(条目) {
++  const 状态 = 读目的状态()
++  const 新 = {
++    日期: 今天(),
++    今日次数: (状态.日期 === 今天() ? 状态.今日次数 : 0) + 1,
++    最近目的: [...状态.最近目的, 条目].slice(-20),
++  }
++  写目的状态(新)
++  return 新
++}
++
++/** 挑一个念头：避开最近 6 条用过的。 */
++function 挑目的() {
++  const 状态 = 读目的状态()
++  const 禁用 = new Set(状态.最近目的.slice(-6))
++  const 候选 = []
++  for (const 组 of 目的库) {
++    for (const 文本 of 组.文本) {
++      const 条目 = `${组.类}：${文本}`
++      if (!禁用.has(条目)) 候选.push(条目)
++    }
++  }
++  const 池 = 候选.length ? 候选 : 目的库.flatMap((组) => 组.文本.map((t) => `${组.类}：${t}`))
++  return 池[Math.floor(Math.random() * 池.length)]
++}
++
++/**
++ * 把「念头」拼成要送进去的那段话。
++ * ⚠ 仍然是 user 消息（DSH 只认这个），所以必须沿用「框住内心话」那层框，
++ *   否则模型又会把它当成对方说的话。
++ */
++function 拼目的文案(配置, 条目) {
++  const 底 = String(配置.触发文案 || '').trim()
++  const 类 = 条目.split('：')[0]
++  return [
++    底,
++    `（这会儿心里冒出来的，是「${类}」这一挂的事：${条目.slice(类.length + 1)}）`,
++    '（用你自己的语气说，一两句就够；别照抄上面这句，也别解释"这是我的设定"。）',
++  ].join(String.fromCharCode(10))
++}
++
+ // ---------- 小工具 ----------
+ 
+ /** 本地时间，给人看的。ISO 那种 UTC 时间她会看糊涂。 */
+@@ -504,6 +629,8 @@ function 造执行体(ctx) {
+ 
+   /** sid -> 她上次说话的时间（ms）。只看 user/message 且来源不是我们自己。 */
+   const 她上次说话 = new Map()
++  /** sid -> 最近几轮对话（[{谁,文}]）。给「目的」生成当素材用，掉了就退回本地词库。 */
++  const 最近对话 = new Map()
+   /** 已经翻过历史日志的 sid（翻一次就够了，别每轮都翻）。 */
+   const 翻过历史 = new Set()
+   /** 我们自己上次开口的时间（ms），用来做冷却，避免自己跟自己聊起来。 */
+@@ -601,6 +728,89 @@ function 造执行体(ctx) {
+    *   · 演练 —— 手动按钮「演练一次」：跳过安静时段和概率（一定走到最后一步），**绝不真发**
+    *   · 真发 —— 手动按钮「真发一次」：跳过等待和试运行，真的 followup（用于当场验证）
+    */
++  /** 把最近几轮对话拼成给模型看的素材（没有就空串）。 */
++  function 素材文本(sid) {
++    const 表 = 最近对话.get(String(sid)) || []
++    return 表.map((x) => `${x.谁}：${x.文}`).join(String.fromCharCode(10))
++  }
++
++  /** 从 agent 身上拿当前用的 provider / model；拿不到就查会话投影文件里的 lastUsed。 */
++  function 取模型(agent, sid) {
++    try {
++      const h = agent && agent.session && agent.session.requestHeader ? agent.session.requestHeader() : null
++      const cfg = h && h.config
++      if (cfg && cfg.provider && cfg.model) return { provider: cfg.provider, model: cfg.model }
++    } catch (error) {}
++    try {
++      const o = agent && agent.options
++      if (o && o.provider && o.model) return { provider: o.provider, model: o.model }
++    } catch (error) {}
++    // ⭐ 兜底：会话投影缓存里的 modelSelection.lastUsed（这台机器上实测有效）
++    try {
++      if (sid) {
++        const 纯 = String(sid).replace(/^session-/, '')
++        const 文件 = join(目录, 'storages', 'session_projcache', 'sessions', `session-${纯}.json`)
++        const j = JSON.parse(readFileSync(文件, 'utf8'))
++        const 用 = j && j.record && j.record.rows && j.record.rows.modelSelection
++        const v = 用 && 用.val && 用.val.lastUsed
++        if (v && v.provider && v.model) return { provider: v.provider, model: v.model }
++      }
++    } catch (error) {}
++    return null
++  }
++
++  /**
++   * ⭐ 用一次很短的模型调用，从最近对话里长出一个"由头"。
++   * 失败 / 没模型 → 返回空串，调用方退回本地词库（绝不因为这一步把整轮搞挂）。
++   * 成本：maxTokens 120，一次几十个 token。
++   */
++  async function 模型挑目的(agent, 素材, sid) {
++    try {
++      if (!ctx.llm || typeof ctx.llm.stream !== 'function') { 记账('目的模型：拿不到 llm 服务'); return '' }
++      let t = 取模型(agent, sid)
++      if (!t) {
++        // 最后一道兜底：拿当前注册的第一个能用的路由（总比不开口强）
++        try {
++          const 省 = (ctx.llm.listProviders?.() || [])[0]
++          if (省 && 省.id) {
++            const 模 = (await ctx.llm.listModels?.(省.id)) || []
++            if (模[0] && 模[0].id) t = { provider: 省.id, model: 模[0].id }
++          }
++        } catch (error) {}
++      }
++      if (!t) { 记账('目的模型：拿不到 provider/model（agent 和兜底都没给）'); return '' }
++      const 系统 = '你在帮一个 AI 角色想「这一次主动找对方开口」的由头。'
++        + '只输出一句中文，20 字以内；不要引号、不要解释、不要称呼对方为"主人"、不要写成问候语。'
++      const 用户 = (素材 ? '最近的对话：' + String.fromCharCode(10) + 素材 + String.fromCharCode(10, 10) : '')
++        + '请给一个具体的由头：惦记某件具体的事、想分享一个具体念头、或想追问上次没说完的。'
++      let 出 = ''
++      for await (const chunk of ctx.llm.stream({
++        provider: t.provider,
++        model: t.model,
++        system: 系统,
++        messages: [{
++          role: 'user',
++          id: 新id(),
++          content: [{ type: 'text', text: 用户 }],
++          source: { kind: 'plugin', plugin: 'speak-up' },
++        }],
++        maxTokens: 800,
++        temperature: 0.9,
++      })) {
++        if (chunk && chunk.type === 'text-delta') 出 += chunk.text
++        if (chunk && chunk.type === 'finish' && chunk.reason && chunk.reason.kind === 'error') {
++          记账('目的模型：流报错 ' + String(JSON.stringify(chunk.reason.failure || {})).slice(0, 160))
++          return ''
++        }
++      }
++      if (!String(出).trim()) { 记账(`目的模型：返回空（provider=${t.provider} model=${t.model}）`); return '' }
++      return 出.replace(/["“”'']/g, '').replace(/\s+/g, ' ').trim().slice(0, 60)
++    } catch (error) {
++      记账(`目的模型失败：${String((error && error.message) || error)}`)
++      return ''
++    }
++  }
++
+   async function 掷一次(来源, 模式) {
+     const 配置 = 读配置()
+     const 演练 = 模式 === '演练' || (模式 === '自动' && 配置.试运行)
+@@ -665,6 +875,25 @@ function 造执行体(ctx) {
+       }
+     }
+ 
++    // ⭐ 目的模式的两道硬闸门（只在自动那一轮生效；手动按钮永远放行）
++    //   ① 主人刚说过话 → 不打扰（"主人在聊"比"我该开口了"优先级高）
++    //   ② 今天已经开口 N 次 → 到此为止
++    if (模式 === '自动' && 配置.目的模式) {
++      if (配置.主人在聊分钟 > 0) {
++        const 上次 = 她上次说话.get(String(目标id))
++        if (上次) {
++          const 距主人 = (Date.now() - 上次) / 60000
++          if (距主人 < 配置.主人在聊分钟) {
++            return 记账(`主人 ${距主人.toFixed(1)} 分钟前刚说过话（阈值 ${配置.主人在聊分钟} 分钟），这轮不打扰`)
++          }
++        }
++      }
++      const 今天几次 = 今日开口次数()
++      if (配置.每日上限 > 0 && 今天几次 >= 配置.每日上限) {
++        return 记账(`今天已经主动开口 ${今天几次} 次（上限 ${配置.每日上限}），今天不再开口`)
++      }
++    }
++
+     // ⚠ 下面这段只给**自动**那一轮用（手动按钮不掷骰子，也不许动「连没中」计数器）。
+     //   口径是她定的：**先说最终答案（命中线），再说怎么来的**，最后说副作用（清零 / 下次变多少）。
+     let 前缀 = ''
+@@ -712,11 +941,24 @@ function 造执行体(ctx) {
+       return 记账(`${前缀}角色填的是 developer，但当前 DSH 送不了 developer 角色（详见 README「做不到的地方」），这轮**主动不发**`)
+     }
+ 
++    // ⭐ 目的模式：开口前先挑一个具体念头
++    //   真发时优先让模型从"最近对话"里长一个（一次很短的调用）；演练不花钱，用本地词库。
++    //   模型失败 / 没模型 → 直接退回词库，绝不影响这一轮。
++    let 目的条目 = ''
++    if (配置.目的模式) {
++      if (模式 !== '演练' && 配置.目的用模型 !== false) {
++        const 生 = await 模型挑目的(agent, 素材文本(目标id), 目标id)
++        if (生) 目的条目 = `当下：${生}`
++      }
++      目的条目 = 目的条目 || 挑目的()
++    }
++    const 底文案 = 目的条目 ? 拼目的文案(配置, 目的条目) : 配置.触发文案
++
+     if (演练) {
+-      return 记账(`${前缀}演练：本来要往「${目标id}」送一句「${框住内心话(配置.触发文案).split(String.fromCharCode(10)).join(' ')}」`)
++      return 记账(`${前缀}演练：本来要往「${目标id}」送一句「${框住内心话(底文案).split(String.fromCharCode(10)).join(' ')}」${目的条目 ? `｜念头：${目的条目}` : ''}`)
+     }
+ 
+-    const 文案 = 框住内心话(配置.触发文案)
++    const 文案 = 框住内心话(底文案)
+     try {
+       const 工厂 = await 拿造消息工厂()
+       const 消息 = 工厂
+@@ -727,7 +969,10 @@ function 造执行体(ctx) {
+       //   Node 22+ 默认当致命错误处理 ⇒ **整个 DSH 宿主进程退出**（2026-10-21 有用户报"装了鱼就死了"）
+       await agent.followup(消息)
+       自己上次开口 = Date.now()
+-      记账(`${前缀}已送出一句，DSH 会照常开一轮：「${文案}」`)
++      记账(`${前缀}已送出一句，DSH 会照常开一轮：「${文案}」${目的条目 ? `｜念头：${目的条目}` : ''}`)
++      if (目的条目) {
++        try { 记一次开口(目的条目) } catch (error) {}
++      }
+       // 让这一条先落到磁盘上，掉电也不会丢（拿不到 sessions 服务就算了）
+       try {
+         if (ctx.sessions && typeof ctx.sessions.flush === 'function') await ctx.sessions.flush(agent.session)
+@@ -808,6 +1053,33 @@ function 造执行体(ctx) {
+       if (来源 && 来源.kind === 源标记) return
+       她上次说话.set(String(session.id), event.time)
+     },
++    /** ⭐ 记最近几轮对话，给「目的」生成当素材（每个会话最多留 8 条）。 */
++    记对话(session, event) {
++      try {
++        if (!event) return
++        const 键 = String(session.id)
++        let 谁 = ''
++        let 文 = ''
++        if (event.type === 'user/message') {
++          const 来源 = event.data && event.data.source
++          if (来源 && 来源.kind === 源标记) return
++          谁 = '主人'
++          文 = ((event.data && event.data.content) || [])
++            .filter((b) => b && b.type === 'text').map((b) => b.text).join(' ').trim()
++        } else if (event.type === 'assistant/message') {
++          谁 = '她'
++          文 = ((event.data && event.data.message && event.data.message.content) || [])
++            .filter((b) => b && b.type === 'text').map((b) => b.text).join(' ').trim()
++        } else {
++          return
++        }
++        if (!文) return
++        const 表 = 最近对话.get(键) || []
++        表.push({ 谁, 文: 文.slice(0, 300) })
++        while (表.length > 8) 表.shift()
++        最近对话.set(键, 表)
++      } catch (error) {}
++    },
+     目标活着() {
+       const 配置 = 读配置()
+       if (配置.目标会话.length === 0) return false
+@@ -1179,6 +1451,7 @@ export function apply(ctx) {
+     const 摘 = ctx.on('session/event', (session, event) => {
+       try {
+         体.记她说话(session, event)
++        体.记对话(session, event)
+       } catch (error) {}
+     })
+     return () => {

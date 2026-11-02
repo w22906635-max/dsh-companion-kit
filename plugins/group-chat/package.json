@@ -1,0 +1,17 @@
+{
+  "name": "dsh-group-chat",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "把几个 DSH 会话拉进一个本地群：谁说完一轮，就把话转给群里其他人，带上名字和轮次上限。不碰任何外部协议。",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "license": "MIT"
+}

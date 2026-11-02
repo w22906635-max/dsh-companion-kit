@@ -1,0 +1,4 @@
+# 把几个 DSH 会话拉进同一个本地群
+- insert:
+    - id: group-chat
+      name: dsh-group-chat
