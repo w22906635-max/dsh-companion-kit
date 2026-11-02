@@ -1,4 +1,4 @@
-# 读配置：napcat.conf.json（存在就用它，不存在就用调用方给的默认值）
+﻿# 读配置：napcat.conf.json（存在就用它，不存在就用调用方给的默认值）
 #
 # ⚠ 两个坑（都是实测踩到的）：
 #   1. 路径必须由调用方用 $PSScriptRoot 算好传进来 —— 函数里的 $PSScriptRoot
