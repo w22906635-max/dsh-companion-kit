@@ -24,7 +24,7 @@ $startScript = Join-Path $PSScriptRoot 'start-napcat.ps1'
 
 # 配置文件优先
 . (Join-Path $PSScriptRoot '_config.ps1')
-$c = Get-NapCatConfig -Dir $NapCatDir -Account $QQAccount -OneBot $OneBotPort -WebUi $WebUiPort
+$c = Get-NapCatConfig -Dir $NapCatDir -Account $QQAccount -OneBot $OneBotPort -WebUi $WebUiPort -ConfigPath (Join-Path $PSScriptRoot 'napcat.conf.json')
 $NapCatDir = $c.NapCatDir
 $QQAccount = $c.QQAccount
 $OneBotPort = $c.OneBotPort
@@ -58,9 +58,12 @@ function KillNapCat {
 }
 
 function StartNapCat {
-    $args = @('-ExecutionPolicy', 'Bypass', '-File', $startScript, '-NapCatDir', $NapCatDir)
+    # ⚠ 必须显式带 -ExecutionPolicy Bypass：
+    #   默认 Windows 执行策略是 Restricted，子进程不加这个会被直接拦下，
+    #   表现是"日志写了要拉起，但什么都没发生"。
+    $args = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $startScript, '-NapCatDir', $NapCatDir)
     if ($QQAccount) { $args += @('-QQAccount', $QQAccount) }
-    & powershell.exe -NoProfile -NonInteractive @args
+    & powershell.exe @args
 }
 
 $st = @{ lastRestartAt = 0; failures = 0 }
@@ -105,7 +108,11 @@ if ($st.failures -ge 3) {
 $waitMin = 15 * [Math]::Pow(2, [Math]::Min($st.failures, 2))   # 15 / 30 / 60
 if ($sinceMin -lt $waitMin) { exit 0 }
 
-W ("半通（OneBot 不通 / WebUI 通）已 {0:N0} 分钟 → 重启 NapCat 试快速登录（第 {1} 次）" -f $sinceMin, ($st.failures + 1))
+if ($st.lastRestartAt -eq 0) {
+    W ("半通（OneBot 不通 / WebUI 通）→ 首次发现，重启 NapCat 试快速登录（第 {0} 次）" -f ($st.failures + 1))
+} else {
+    W ("半通已 {0:N0} 分钟 → 重启 NapCat 试快速登录（第 {1} 次）" -f $sinceMin, ($st.failures + 1))
+}
 KillNapCat
 Start-Sleep -Seconds 3
 StartNapCat

@@ -17,7 +17,7 @@ $ErrorActionPreference = 'Continue'
 
 # 配置文件（同目录的 napcat.conf.json）优先于命令行参数
 . (Join-Path $PSScriptRoot '_config.ps1')
-$c = Get-NapCatConfig -Dir $NapCatDir -Account $QQAccount -OneBot 3000 -WebUi $WebUiPort
+$c = Get-NapCatConfig -Dir $NapCatDir -Account $QQAccount -OneBot 3000 -WebUi $WebUiPort -ConfigPath (Join-Path $PSScriptRoot 'napcat.conf.json')
 $NapCatDir = $c.NapCatDir
 $QQAccount = $c.QQAccount
 $WebUiPort = $c.WebUiPort
