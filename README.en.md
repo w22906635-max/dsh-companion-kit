@@ -12,6 +12,34 @@
 
 ---
 
+## Where this came from
+
+Let's be honest: **this is not the work of a programmer.**
+
+The author is a medical student who built all of this by working with an AI, step by step.
+Every trap listed here — "the execution policy silently blocked the script", "one missing backslash
+in the config made it fall back to defaults without a word", "without admin you cannot register
+a logon task" — was hit **first**, debugged, and only then written down.
+
+So the commands in these docs **have been run for real**. But:
+
+> **Your machine is not my machine. Follow the docs and you will hit something I never saw.**
+
+That is not a disclaimer to hide behind; it is simply how this kind of setup works.
+Windows version, NapCat version, DSH version, admin rights, whether your path contains spaces —
+change any one of them and behaviour can differ.
+
+### How to use this
+
+1. Change **one thing at a time** and verify immediately — don't configure everything then hope
+2. When something breaks, **read the logs first** (`napcat-out.log`, `napcat-watchdog.log`)
+3. Search the exact error text before editing any script
+4. Once it works, send your differences back — that is how the next person's experience improves
+
+This is a **route map**, not a babysitter. It assumes you are willing to try, read logs, and iterate.
+
+---
+
 ## What it solves
 
 Wiring a DSH session to your QQ usually means assembling four or five moving parts, and then running into these:
