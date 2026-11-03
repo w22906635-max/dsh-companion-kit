@@ -4,6 +4,9 @@
 >
 > This is not "yet another QQ bot framework". It contains none of the upstream plugin code — it wires them together and keeps you from babysitting a dead login at 2 a.m.
 
+**Tested on**: Windows 11 (build 26200) + DSH `0.2.1-rc.5` + NapCat Shell `9.9.31`.
+The launcher, watchdog and scheduled tasks all ran on that combination — the traps in these docs were collected the hard way there.
+
 ⚠️ **Read this first**
 - NapCat is a third-party QQ runtime, not affiliated with Tencent. **Automating a QQ account carries a real ban risk.** Use a throwaway account.
 - This repo contains no real account IDs, passwords, cookies, or chat logs.
