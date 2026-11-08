@@ -1,9 +1,16 @@
-diff --git a/lib/client.js b/lib/client.js
-index a293228..4099b28 100644
+﻿diff --git a/lib/client.js b/lib/client.js
+index a293228..4fdf9d4 100644
 --- a/lib/client.js
 +++ b/lib/client.js
-@@ -430,7 +430,20 @@ window.__ModuleLoader__.load({
+@@ -428,9 +428,27 @@ window.__ModuleLoader__.load({
+             勾(配置.试运行, (v) => 改('试运行', v)),
+             '开着的时候：掷中了也只写一条记录，不真的发。先看几轮记录，确认时机合适了再关掉它。',
            ),
++          行(
++            '自动唤醒目标会话',
++            勾(配置.自动唤醒, (v) => 改('自动唤醒', v)),
++            '到点时发现目标会话没活着（DSH 重启后会话是冷的），先把它唤醒再说话。关掉 = 遇到冷会话直接跳过这一轮。',
++          ),
          ),
  
 -        // —— 骰子 ——
@@ -25,7 +32,7 @@ index a293228..4099b28 100644
            h('div', { style: { ...S.h, margin: '0 0 8px' } }, '骰子'),
            h('div', { style: S.dim },
 diff --git a/lib/host.js b/lib/host.js
-index fe4142d..03ffa89 100644
+index fe4142d..9f733a2 100644
 --- a/lib/host.js
 +++ b/lib/host.js
 @@ -54,7 +54,7 @@ export const name = 'speak-up'
@@ -37,7 +44,7 @@ index fe4142d..03ffa89 100644
  
  // ---------- 常量 ----------
  
-@@ -131,6 +131,15 @@ const 默认配置 = {
+@@ -131,6 +131,16 @@ const 默认配置 = {
    搭话冷却分钟: 20, // 0 = 不冷却
    触发文案: '好久没人跟我说话了，我该主动去打个招呼',
    角色: 'user', // 'user' = 现在唯一能跑通的；'developer' = 本插件会拒绝（详见文件头注释）
@@ -46,6 +53,7 @@ index fe4142d..03ffa89 100644
 +  //   不再只是"到点掷骰子+说一句固定的话"，而是**先挑一个具体念头**再开口：
 +  //   关心 / 分享 / 好奇 / 续聊。挑过的最近几条不会重复挑（去重）。
 +  //   关掉它 = 退回原来的行为（只发「触发文案」）。
++  自动唤醒: true, // 目标会话没活着时，先把它唤醒再说话（DSH 重启后会话是冷的）
 +  目的模式: true,
 +  目的用模型: true, // 真发时让模型从最近对话里想一个由头（一次很短、几十 token）；关掉=只用本地词库
 +  每日上限: 10, // 一天最多主动开口几次（数的是"真的送出去"的次数）
@@ -53,10 +61,11 @@ index fe4142d..03ffa89 100644
  }
  
  // ---------- 配置读写 ----------
-@@ -232,6 +241,10 @@ function 归一化(原始) {
+@@ -232,6 +242,11 @@ function 归一化(原始) {
      触发文案:
        typeof 混.触发文案 === 'string' && 混.触发文案.trim() !== '' ? 混.触发文案 : 默认配置.触发文案,
      角色: String(混.角色 || 'user').toLowerCase() === 'developer' ? 'developer' : 'user',
++    自动唤醒: 布(混.自动唤醒, 默认配置.自动唤醒),
 +    目的模式: 布(混.目的模式, 默认配置.目的模式),
 +    目的用模型: 布(混.目的用模型, 默认配置.目的用模型),
 +    每日上限: 数(混.每日上限, 默认配置.每日上限, 0, 100),
@@ -64,7 +73,7 @@ index fe4142d..03ffa89 100644
    }
  }
  
-@@ -268,6 +281,118 @@ function 写配置(配置) {
+@@ -268,6 +283,118 @@ function 写配置(配置) {
    }
  }
  
@@ -183,7 +192,23 @@ index fe4142d..03ffa89 100644
  // ---------- 小工具 ----------
  
  /** 本地时间，给人看的。ISO 那种 UTC 时间她会看糊涂。 */
-@@ -504,6 +629,8 @@ function 造执行体(ctx) {
+@@ -468,6 +595,15 @@ function 框住内心话(文案) {
+     + String.fromCharCode(10) + 原话
+ }
+ 
++/**
++ * ⭐ 0.2.9 回移：这条 assistant 消息里**有没有真说出话**。
++ *   只想了、只调了工具、正文全空白 —— 都不算她开口（冷却不该被白吃）。
++ */
++function 说了话(消息) {
++  const 块们 = 消息 && Array.isArray(消息.content) ? 消息.content : []
++  return 块们.some((b) => b && b.type === 'text' && typeof b.text === 'string' && b.text.trim() !== '')
++}
++
+ // ---------- 装消息工厂（能拿到官方的就用官方的）----------
+ 
+ let 造消息工厂 = undefined // undefined = 还没试过；null = 试过，拿不到
+@@ -504,6 +640,8 @@ function 造执行体(ctx) {
  
    /** sid -> 她上次说话的时间（ms）。只看 user/message 且来源不是我们自己。 */
    const 她上次说话 = new Map()
@@ -192,7 +217,7 @@ index fe4142d..03ffa89 100644
    /** 已经翻过历史日志的 sid（翻一次就够了，别每轮都翻）。 */
    const 翻过历史 = new Set()
    /** 我们自己上次开口的时间（ms），用来做冷却，避免自己跟自己聊起来。 */
-@@ -601,6 +728,89 @@ function 造执行体(ctx) {
+@@ -601,6 +739,105 @@ function 造执行体(ctx) {
     *   · 演练 —— 手动按钮「演练一次」：跳过安静时段和概率（一定走到最后一步），**绝不真发**
     *   · 真发 —— 手动按钮「真发一次」：跳过等待和试运行，真的 followup（用于当场验证）
     */
@@ -225,6 +250,22 @@ index fe4142d..03ffa89 100644
 +      }
 +    } catch (error) {}
 +    return null
++  }
++
++  /**
++   * ⭐ 2026-11-03：把没活着的会话唤醒（DSH 重启后会话是冷的，followup 送不进去）。
++   *   返回 'ok' 或失败原因字符串。
++   */
++  async function 唤醒会话(id) {
++    const sc = ctx.sessionController || (ctx.get && ctx.get('sessionController'))
++    if (!sc || typeof sc.resolveAgent !== 'function') return '没有 sessionController 服务'
++    try {
++      const 超时 = new Promise((_, rej) => setTimeout(() => rej(new Error('唤醒超时（10 秒）')), 10000))
++      await Promise.race([sc.resolveAgent(id), 超时])
++      return 'ok'
++    } catch (error) {
++      return String((error && error.message) || error)
++    }
 +  }
 +
 +  /**
@@ -282,7 +323,36 @@ index fe4142d..03ffa89 100644
    async function 掷一次(来源, 模式) {
      const 配置 = 读配置()
      const 演练 = 模式 === '演练' || (模式 === '自动' && 配置.试运行)
-@@ -665,6 +875,25 @@ function 造执行体(ctx) {
+@@ -634,7 +871,18 @@ function 造执行体(ctx) {
+         不可用.push(`${短id(id)}(已归档)`)
+         continue
+       }
+-      const a = 找agent(ctx, id)
++      let a = 找agent(ctx, id)
++      // ⭐ 2026-11-03：目标会话没活着时，先试着把它唤醒（默认开）
++      //   以前是直接跳过 —— DSH 一重启，「聊天」没人点开，她就整天不说话
++      if (a === undefined && 配置.自动唤醒) {
++        const 唤醒结果 = await 唤醒会话(id)
++        if (唤醒结果 === 'ok') {
++          a = 找agent(ctx, id)
++          if (a !== undefined) 记账(`「${短id(id)}」当时没活着，已经把它唤醒了`)
++        } else {
++          记账(`「${短id(id)}」没活着，唤醒失败：${唤醒结果}`)
++        }
++      }
+       if (a === undefined) {
+         不可用.push(`${短id(id)}(没活着)`)
+         continue
+@@ -648,7 +896,7 @@ function 造执行体(ctx) {
+     }
+     if (可用.length === 0) {
+       return 记账(
+-        `勾的目标会话现在都不能说话（${不可用.join('、') || '（空）'}）—— 按设计**不自动唤醒**，这轮什么都不做`,
++        `勾的目标会话现在都不能说话（${不可用.join('、') || '（空）'}）—— 这轮什么都不做`,
+       )
+     }
+     const 挑中 = 可用[Math.floor(Math.random() * 可用.length)]
+@@ -665,6 +913,25 @@ function 造执行体(ctx) {
        }
      }
  
@@ -308,7 +378,7 @@ index fe4142d..03ffa89 100644
      // ⚠ 下面这段只给**自动**那一轮用（手动按钮不掷骰子，也不许动「连没中」计数器）。
      //   口径是她定的：**先说最终答案（命中线），再说怎么来的**，最后说副作用（清零 / 下次变多少）。
      let 前缀 = ''
-@@ -712,11 +941,24 @@ function 造执行体(ctx) {
+@@ -712,11 +979,24 @@ function 造执行体(ctx) {
        return 记账(`${前缀}角色填的是 developer，但当前 DSH 送不了 developer 角色（详见 README「做不到的地方」），这轮**主动不发**`)
      }
  
@@ -335,11 +405,16 @@ index fe4142d..03ffa89 100644
      try {
        const 工厂 = await 拿造消息工厂()
        const 消息 = 工厂
-@@ -727,7 +969,10 @@ function 造执行体(ctx) {
+@@ -726,8 +1006,14 @@ function 造执行体(ctx) {
+       //   它一旦 reject（会话正忙 / agent 已释放 / 流出错），就是**未处理的 rejection**，
        //   Node 22+ 默认当致命错误处理 ⇒ **整个 DSH 宿主进程退出**（2026-10-21 有用户报"装了鱼就死了"）
        await agent.followup(消息)
-       自己上次开口 = Date.now()
+-      自己上次开口 = Date.now()
 -      记账(`${前缀}已送出一句，DSH 会照常开一轮：「${文案}」`)
++      // ⭐ 0.2.9 回移：这里不再记「自己上次开口」。
++      //   投递只是把一句念头塞进她的会话，她完全可以看完不说（真机发生过：
++      //   投递成功、这一轮 1 秒结束、一个字没发，却照样吃掉整个冷却）。
++      //   现在改成「真的出现一条有正文的 assistant 消息」才算 —— 见 记她说话()。
 +      记账(`${前缀}已送出一句，DSH 会照常开一轮：「${文案}」${目的条目 ? `｜念头：${目的条目}` : ''}`)
 +      if (目的条目) {
 +        try { 记一次开口(目的条目) } catch (error) {}
@@ -347,10 +422,30 @@ index fe4142d..03ffa89 100644
        // 让这一条先落到磁盘上，掉电也不会丢（拿不到 sessions 服务就算了）
        try {
          if (ctx.sessions && typeof ctx.sessions.flush === 'function') await ctx.sessions.flush(agent.session)
-@@ -808,6 +1053,33 @@ function 造执行体(ctx) {
-       if (来源 && 来源.kind === 源标记) return
-       她上次说话.set(String(session.id), event.time)
-     },
+@@ -803,10 +1089,48 @@ function 造执行体(ctx) {
+     当前间隔: () => 表上的间隔,
+     配置: 读配置,
+     记她说话(session, event) {
+-      if (!event || event.type !== 'user/message') return
+-      const 来源 = event.data && event.data.source
+-      if (来源 && 来源.kind === 源标记) return
+-      她上次说话.set(String(session.id), event.time)
++      if (!event) return
++      if (event.type === 'user/message') {
++        const 来源 = event.data && event.data.source
++        if (来源 && 来源.kind === 源标记) return
++        她上次说话.set(String(session.id), event.time)
++        return
++      }
++      // ⭐ 0.2.9 回移：冷却只认「她**真的说了话**」。
++      //   · assistant/message 里没有非空 text 块（只想了、只调了工具）→ 不算
++      //   · 不是勾着的目标会话（别的会话、子代理）→ 也不算
++      if (event.type !== 'assistant/message') return
++      if (!说了话(event.data && event.data.message)) return
++      const sid = String(session.id)
++      if (!读配置().目标会话.some((id) => 会话键(id) === 会话键(sid))) return
++      自己上次开口 = event.time
++    },
 +    /** ⭐ 记最近几轮对话，给「目的」生成当素材（每个会话最多留 8 条）。 */
 +    记对话(session, event) {
 +      try {
@@ -377,11 +472,83 @@ index fe4142d..03ffa89 100644
 +        while (表.length > 8) 表.shift()
 +        最近对话.set(键, 表)
 +      } catch (error) {}
-+    },
+     },
      目标活着() {
        const 配置 = 读配置()
-       if (配置.目标会话.length === 0) return false
-@@ -1179,6 +1451,7 @@ export function apply(ctx) {
+@@ -975,13 +1299,45 @@ export function apply(ctx) {
+     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+     res.end(JSON.stringify(o))
+   }
+-  const 路线 = (路径, handler) =>
++  /**
++   * ⭐ 0.3.0 回移：给本机接口加一道门。
++   *   以前只认路径不认来路 —— 任意网页放一个
++   *   `<img src="http://127.0.0.1:<端口>/dsh-speak-up/roll">` 就能让插件真掷一次骰
++   *   （勾了会话、关了试运行就是真开一轮，花余额）；/save 也能被跨站改掉。
++   *   两层：宿主有 connection.requestRejection 就交给它；没有就自己看来源。
++   *   放行 dsh-app:（桌面端界面来源）与 127.0.0.1 / localhost，以及**没有来源**的本地调用。
++   */
++  const 本机来源 = /^(?:dsh-app:|https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?\/?$)/i
++  const 拦住 = (req, res) => {
++    // ⚠ 与上游 0.3.x 的差异（本机实测）：
++    //   上游先问 `connection.requestRejection`，可这台宿主对**本机脚本/桌面端**的请求
++    //   一律回 401（没有它认的连接凭据）—— 结果连设置页读 /state 都被挡住。
++    //   所以这里只保留「看来源」那一层：跨站一律拒，本机页面与没有来源的本地调用放行。
++    //   （跨站页面想发请求，浏览器一定会带上 Origin 或 sec-fetch-site，够用。）
++    const 头 = req.headers || {}
++    const 站 = String(头['sec-fetch-site'] || '').toLowerCase()
++    const 源 = String(头.origin || '').trim()
++    if (站 === 'cross-site' || (源 && !本机来源.test(源))) {
++      res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' })
++      res.end('forbidden')
++      return true
++    }
++    return false
++  }
++
++  const 路线 = (路径, handler, 选项) =>
+     ctx.effect(() =>
+       ctx.webServer.register({
+         kind: 'exact',
+         path: 路径,
+         handler: async (req, res) => {
+           try {
++            if (拦住(req, res)) return
++            if (选项 && 选项.只收POST && req.method !== 'POST') {
++              res.writeHead(405, { 'content-type': 'application/json; charset=utf-8', allow: 'POST' })
++              res.end(JSON.stringify({ ok: false, 说: '这条只接受 POST' }))
++              return
++            }
+             await handler(req, res)
+           } catch (error) {
+             回(res, { ok: false, 说: String((error && error.message) || error) })
+@@ -1138,7 +1494,7 @@ export function apply(ctx) {
+         `安静 ${洗好.安静起}~${洗好.安静止} 点、${洗好.试运行 ? '试运行' : '真发'}）`,
+     )
+     回(res, { ...(await 概况()), 说: '保存好了' })
+-  })
++  }, { 只收POST: true })
+ 
+   // 掷一次：演练 / 真发。**这里和定时器走的是同一段逻辑**，不是另写一份。
+   路线(`${路由前缀}/roll`, async (req, res) => {
+@@ -1146,7 +1502,7 @@ export function apply(ctx) {
+     const 模式 = 来 && 来.模式 === '真发' ? '真发' : '演练'
+     await 体.掷一次('手动', 模式)
+     回(res, { ok: true, 说: 模式 === '真发' ? '已按真发跑了一次（结果看下面的记录）' : '已演练一次（没有真发）', 日志: 体.日志 })
+-  })
++  }, { 只收POST: true })
+ 
+   // 新建一个「小屋」会话（可选顺手设成目标）
+   路线(`${路由前缀}/new-session`, async (req, res) => {
+@@ -1172,13 +1528,14 @@ export function apply(ctx) {
+     }
+     体.记账(`新建了一个会话：${id}${已勾上 ? '（已经帮你勾上了）' : ''}`)
+     回(res, { ...(await 概况()), ok: true, 新会话: id, 说: `建好了：${id}${已勾上 ? '，已经勾上' : ''}` })
+-  })
++  }, { 只收POST: true })
+ 
+   // 记下「她上次说话」，给时机因子用
+   ctx.effect(() => {
      const 摘 = ctx.on('session/event', (session, event) => {
        try {
          体.记她说话(session, event)
